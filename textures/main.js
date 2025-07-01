@@ -401,23 +401,86 @@ function handleOutputCanvasClick(e) {
         return;
     }
 
-    let cropCanvas = document.createElement('canvas');
-    cropCanvas.width = sSize;
-    cropCanvas.height = sSize;
-    let cropCtx = cropCanvas.getContext('2d');
-    cropCtx.drawImage(cleanWarpedCanvas, tlx, tly, sSize, sSize, 0, 0, sSize, sSize);
-
-    document.body.appendChild(cropCanvas);
-    cropCanvas.style.border = "1px solid red";
-    cropCanvas.style.margin = "4px";
-
-    let label = prompt(`Enter label for square (${i}, ${j}):`, "");
-    if (label !== null && label !== "") {
+    identifySquare(i, j, tlx, tly, sSize).then(label => {
+    if (label) {
         squareTexts[squareKey] = label;
         drawGridOverlay();
         drawInput();
     }
+    });
+
+
 }
+
+const referenceImages = {};
+const blockType = 'grass'; // default type
+
+// Load 4 reference images at startup
+function loadReferenceImages() {
+    for (let i = 0; i < 4; i++) {
+        const img = new Image();
+        img.src = `/blocks/${blockType}/${i}.png`;
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            referenceImages[i] = ctx.getImageData(0, 0, img.width, img.height);
+        };
+    }
+}
+loadReferenceImages();
+
+function toGrayscale(imageData) {
+    const data = imageData.data;
+    const gray = new Uint8ClampedArray(data.length);
+    for (let i = 0; i < data.length; i += 4) {
+        const avg = 0.3 * data[i] + 0.59 * data[i+1] + 0.11 * data[i+2];
+        gray[i] = gray[i+1] = gray[i+2] = avg;
+        gray[i+3] = 255;
+    }
+    return new ImageData(gray, imageData.width, imageData.height);
+}
+
+function identifySquare(i, j, x, y, size) {
+    return new Promise((resolve) => {
+        const ctx = cleanWarpedCanvas.getContext('2d');
+        const squareImage = ctx.getImageData(x, y, size, size);
+        const squareGray = toGrayscale(squareImage);
+
+        let bestMatch = null;
+        let lowestDiff = Infinity;
+
+        for (let index in referenceImages) {
+            const ref = referenceImages[index];
+            if (!ref) continue;
+
+            // Resize if needed to match
+            const resizedCanvas = document.createElement('canvas');
+            resizedCanvas.width = ref.width;
+            resizedCanvas.height = ref.height;
+            resizedCanvas.getContext('2d').putImageData(squareGray, 0, 0);
+            const resizedData = resizedCanvas.getContext('2d').getImageData(0, 0, ref.width, ref.height);
+
+            const diff = new Uint8ClampedArray(ref.width * ref.height * 4);
+            const numDiffPixels = pixelmatch(
+                ref.data, resizedData.data, diff,
+                ref.width, ref.height,
+                { threshold: 0.1 }
+            );
+
+            if (numDiffPixels < lowestDiff) {
+                lowestDiff = numDiffPixels;
+                bestMatch = index;
+            }
+        }
+
+        const confidence = Math.max(0, 100 - (lowestDiff / (size * size) * 100)).toFixed(1);
+        resolve(bestMatch !== null ? `${bestMatch} (${confidence}%)` : null);
+    });
+}
+
 
 function drawGridOverlay() {
     if (!warpedMat) return;
@@ -481,15 +544,30 @@ function drawGridOverlay() {
         let tly = squarePoints[0][1] + j * squareSize;
         let centerX = tlx + squareSize / 2;
         let centerY = tly + squareSize / 2;
-        let fontSize = Math.round((3 / 4) * squareSize / ((squareTexts[key].length) / 2));
+        let fontSize = Math.round((3 / 4) * squareSize / ((squareTexts[key].length) * 2));
+        let maxLabelWidth = (5 / 7) * squareSize;
+
+        // Set main label font and measure
         ctx.font = `${fontSize}px Arial`;
         ctx.fillStyle = 'yellow';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(squareTexts[key], centerX, centerY - 10);
-        ctx.font = `${Math.round((24 / 26) * fontSize)}px Arial`;
+
+        // If label is too wide, shrink font size to fit
+        let label = squareTexts[key];
+        let measured = ctx.measureText(label);
+        while (measured.width > maxLabelWidth && fontSize > 8) {
+            fontSize -= 1;
+            ctx.font = `${fontSize}px Arial`;
+            measured = ctx.measureText(label);
+        }
+        ctx.fillText(label, centerX, centerY - 0.2 * squareSize, maxLabelWidth);
+
+        // Coordinates: 4/5 of font size
+        let coordFontSize = Math.round((4 / 5) * fontSize);
+        ctx.font = `${coordFontSize}px Arial`;
         ctx.fillStyle = 'cyan';
-        ctx.fillText(`(${i},${j})`, centerX, centerY + 10);
+        ctx.fillText(`(${i},${j})`, centerX, centerY + 0.2 * squareSize);
     }
     ctx.restore();
 }
@@ -568,7 +646,9 @@ function handleGenerate() {
     const generationType = document.getElementById('generationType').value;
     const orientation = document.getElementById('orientation').value;
     const { relativeX, relativeY, relativeZ } = getCoordinateInputs();
-    generateRaw(orientation, generationType, relativeX, relativeY, relativeZ);
+    // Get the state of the direction correction checkbox
+    const directionCorrectionEnabled = document.getElementById('directionCorrectionCheckbox')?.checked ?? true;
+    generateRaw(orientation, generationType, relativeX, relativeY, relativeZ, directionCorrectionEnabled);
 }
 
 // Place your existing generateRaw() function here if used
@@ -583,7 +663,7 @@ function getCoordinateInputs() {
     return { relativeX, relativeY, relativeZ };
 }
 
-function generateRaw(orientation = 'wall', type = 'raw',relativeX, relativeY, relativeZ) {
+function generateRaw(orientation = 'wall', type = 'raw', relativeX, relativeY, relativeZ, directionCorrectionEnabled = true) {
     if (!squareDst || Object.keys(squareTexts).length === 0) {
         showMessageBox('No detected squares found. Please click on some squares in the warped output to run detection first.');
         return;
@@ -702,7 +782,7 @@ function generateRaw(orientation = 'wall', type = 'raw',relativeX, relativeY, re
         finalCoordZ += relativeZ;
 
         // Adjust coordinates based on detected direction (only for X and Z)
-        if (detectedDirection && detectedDirection !== "North") {
+        if (directionCorrectionEnabled && detectedDirection && detectedDirection !== "North") {
             [finalCoordX, finalCoordZ] = adjustCoordinatesForDirection(finalCoordX, finalCoordZ, detectedDirection);
         }
 
@@ -715,10 +795,14 @@ function generateRaw(orientation = 'wall', type = 'raw',relativeX, relativeY, re
     }
 
     // Display the generated output in the dedicated section
+    
     const directionInfo = detectedDirection ? ` (Adjusted for ${detectedDirection} facing)` : '';
     const title = `${orientation.charAt(0).toUpperCase() + orientation.slice(1)} ${type.charAt(0).toUpperCase() + type.slice(1)} Data${directionInfo}`;
+    if (directionCorrectionEnabled) {
     displayGeneratedOutput(output, title);
-
+    } else {
+        displayGeneratedOutput(output,' ');
+    }
     console.log('Generated data:', output);
 }
 
