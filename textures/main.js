@@ -368,7 +368,10 @@ function applyPerspectiveTransform() {
 
 function handleOutputCanvasClick(e) {
     if (e.button !== 0) return;
-    if (!cleanWarpedCanvas || !squareDst) return;
+    if (!cleanWarpedCanvas || !squareDst) {
+        logger.warn("Cannot handle click: missing warped canvas or square destination");
+        return;
+    }
 
     const rect = outputCanvas.getBoundingClientRect();
     const scaleX = outputCanvas.width / rect.width;
@@ -391,32 +394,55 @@ function handleOutputCanvasClick(e) {
     let brx = tlx + sSize;
     let bry = tly + sSize;
 
-    if (tlx < 0 || tly < 0 || brx > outputCanvas.width || bry > outputCanvas.height) return;
+    if (tlx < 0 || tly < 0 || brx > outputCanvas.width || bry > outputCanvas.height) {
+        logger.debug(`Click outside valid grid area: (${x}, ${y}) -> grid (${i}, ${j})`);
+        return;
+    }
 
     let squareKey = `${i},${j}`;
 
     if (squareTexts[squareKey]) {
+        logger.info(`Removing existing identification for square (${i},${j}): ${squareTexts[squareKey]}`);
         delete squareTexts[squareKey];
         drawGridOverlay();
         return;
     }
 
+    logger.info(`Starting identification for square at grid (${i},${j})`);
     identifySquare(i, j, tlx, tly, sSize).then(label => {
-    if (label) {
-        squareTexts[squareKey] = label;
-        drawGridOverlay();
-        drawInput();
-    }
+        if (label) {
+            squareTexts[squareKey] = label;
+            logger.info(`Successfully identified square (${i},${j}) as ${label}`);
+            drawGridOverlay();
+            drawInput();
+        } else {
+            logger.warn(`Failed to identify square (${i},${j})`);
+        }
+    }).catch(error => {
+        logger.error(`Error during square identification (${i},${j}): ${error.message}`);
     });
-
-
 }
 
 const referenceImages = {};
 const blockType = 'grass'; // default type
 
+// Enhanced logging system
+const logger = {
+    log: (message, level = 'info') => {
+        const timestamp = new Date().toLocaleTimeString();
+        const prefix = `[${timestamp}] [${level.toUpperCase()}]`;
+        console.log(`${prefix} ${message}`);
+    },
+    info: (message) => logger.log(message, 'info'),
+    warn: (message) => logger.log(message, 'warn'),
+    error: (message) => logger.log(message, 'error'),
+    debug: (message) => logger.log(message, 'debug')
+};
+
 // Load 4 reference images at startup
 function loadReferenceImages() {
+    logger.info(`Loading reference images for block type: ${blockType}`);
+    
     for (let i = 0; i < 4; i++) {
         const img = new Image();
         img.src = `/blocks/${blockType}/${i}.png`;
@@ -427,10 +453,19 @@ function loadReferenceImages() {
             const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0);
             referenceImages[i] = ctx.getImageData(0, 0, img.width, img.height);
+            logger.debug(`Loaded reference image ${i}: ${img.width}x${img.height} pixels`);
+        };
+        img.onerror = () => {
+            logger.error(`Failed to load reference image ${i}: ${img.src}`);
         };
     }
 }
 loadReferenceImages();
+
+// Initialize logging
+logger.info("Texture rotation detection system initialized");
+logger.info("Enhanced pixel matching with similarity comparison enabled");
+logger.debug("Available similarity metrics: SSIM, NCC, Pixel Similarity, Pixelmatch");
 
 function toGrayscale(imageData) {
     const data = imageData.data;
@@ -443,41 +478,212 @@ function toGrayscale(imageData) {
     return new ImageData(gray, imageData.width, imageData.height);
 }
 
+// Advanced similarity calculation functions
+function calculateImageStats(imageData) {
+    const data = imageData.data;
+    let sum = 0, sumSq = 0;
+    const pixelCount = data.length / 4;
+    
+    for (let i = 0; i < data.length; i += 4) {
+        const gray = 0.3 * data[i] + 0.59 * data[i+1] + 0.11 * data[i+2];
+        sum += gray;
+        sumSq += gray * gray;
+    }
+    
+    const mean = sum / pixelCount;
+    const variance = (sumSq / pixelCount) - (mean * mean);
+    const stdDev = Math.sqrt(variance);
+    
+    return { mean, stdDev, pixelCount };
+}
+
+function calculateSSIM(img1Data, img2Data) {
+    if (img1Data.width !== img2Data.width || img1Data.height !== img2Data.height) {
+        return 0; // Cannot compare images of different sizes
+    }
+    
+    const stats1 = calculateImageStats(img1Data);
+    const stats2 = calculateImageStats(img2Data);
+    
+    const data1 = img1Data.data;
+    const data2 = img2Data.data;
+    let covariance = 0;
+    
+    for (let i = 0; i < data1.length; i += 4) {
+        const gray1 = 0.3 * data1[i] + 0.59 * data1[i+1] + 0.11 * data1[i+2];
+        const gray2 = 0.3 * data2[i] + 0.59 * data2[i+1] + 0.11 * data2[i+2];
+        covariance += (gray1 - stats1.mean) * (gray2 - stats2.mean);
+    }
+    covariance /= stats1.pixelCount;
+    
+    // SSIM constants
+    const c1 = 0.01 * 255 * 0.01 * 255;
+    const c2 = 0.03 * 255 * 0.03 * 255;
+    
+    const ssim = ((2 * stats1.mean * stats2.mean + c1) * (2 * covariance + c2)) /
+                 ((stats1.mean * stats1.mean + stats2.mean * stats2.mean + c1) * 
+                  (stats1.stdDev * stats1.stdDev + stats2.stdDev * stats2.stdDev + c2));
+    
+    return Math.max(0, Math.min(1, ssim));
+}
+
+function calculateNormalizedCrossCorrelation(img1Data, img2Data) {
+    if (img1Data.width !== img2Data.width || img1Data.height !== img2Data.height) {
+        return 0;
+    }
+    
+    const stats1 = calculateImageStats(img1Data);
+    const stats2 = calculateImageStats(img2Data);
+    
+    const data1 = img1Data.data;
+    const data2 = img2Data.data;
+    let correlation = 0;
+    
+    for (let i = 0; i < data1.length; i += 4) {
+        const gray1 = 0.3 * data1[i] + 0.59 * data1[i+1] + 0.11 * data1[i+2];
+        const gray2 = 0.3 * data2[i] + 0.59 * data2[i+1] + 0.11 * data2[i+2];
+        correlation += (gray1 - stats1.mean) * (gray2 - stats2.mean);
+    }
+    
+    const denominator = Math.sqrt(stats1.stdDev * stats1.stdDev * stats1.pixelCount) * 
+                       Math.sqrt(stats2.stdDev * stats2.stdDev * stats2.pixelCount);
+    
+    return denominator === 0 ? 0 : Math.max(-1, Math.min(1, correlation / denominator));
+}
+
+function calculatePixelSimilarity(img1Data, img2Data) {
+    if (img1Data.width !== img2Data.width || img1Data.height !== img2Data.height) {
+        return 0;
+    }
+    
+    const data1 = img1Data.data;
+    const data2 = img2Data.data;
+    let totalDiff = 0;
+    const maxDiff = 255 * Math.sqrt(3); // Maximum possible RGB difference
+    
+    for (let i = 0; i < data1.length; i += 4) {
+        const dr = data1[i] - data2[i];
+        const dg = data1[i+1] - data2[i+1];
+        const db = data1[i+2] - data2[i+2];
+        const pixelDiff = Math.sqrt(dr*dr + dg*dg + db*db);
+        totalDiff += pixelDiff / maxDiff;
+    }
+    
+    const avgDiff = totalDiff / (data1.length / 4);
+    return Math.max(0, 1 - avgDiff); // Convert to similarity (0-1)
+}
+
+function resizeImageData(imageData, targetWidth, targetHeight) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Create source canvas
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = imageData.width;
+    sourceCanvas.height = imageData.height;
+    sourceCanvas.getContext('2d').putImageData(imageData, 0, 0);
+    
+    // Resize to target
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight);
+    
+    return ctx.getImageData(0, 0, targetWidth, targetHeight);
+}
+
 function identifySquare(i, j, x, y, size) {
     return new Promise((resolve) => {
-        const ctx = cleanWarpedCanvas.getContext('2d');
-        const squareImage = ctx.getImageData(x, y, size, size);
-        const squareGray = toGrayscale(squareImage);
+        logger.debug(`Identifying square at grid (${i},${j}), pixel coords (${x},${y}), size: ${size}`);
+        
+        try {
+            const ctx = cleanWarpedCanvas.getContext('2d');
+            const squareImage = ctx.getImageData(x, y, size, size);
+            logger.debug(`Extracted square image: ${squareImage.width}x${squareImage.height}`);
 
-        let bestMatch = null;
-        let lowestDiff = Infinity;
+            let bestMatch = null;
+            let highestSimilarity = -1;
+            let matchDetails = [];
 
-        for (let index in referenceImages) {
-            const ref = referenceImages[index];
-            if (!ref) continue;
+            for (let index in referenceImages) {
+                const ref = referenceImages[index];
+                if (!ref) {
+                    logger.warn(`Reference image ${index} is not loaded`);
+                    continue;
+                }
 
-            // Resize if needed to match
-            const resizedCanvas = document.createElement('canvas');
-            resizedCanvas.width = ref.width;
-            resizedCanvas.height = ref.height;
-            resizedCanvas.getContext('2d').putImageData(squareGray, 0, 0);
-            const resizedData = resizedCanvas.getContext('2d').getImageData(0, 0, ref.width, ref.height);
+                // Resize square to match reference dimensions for accurate comparison
+                const resizedSquare = resizeImageData(squareImage, ref.width, ref.height);
+                const refGray = toGrayscale(ref);
+                const squareGray = toGrayscale(resizedSquare);
 
-            const diff = new Uint8ClampedArray(ref.width * ref.height * 4);
-            const numDiffPixels = pixelmatch(
-                ref.data, resizedData.data, diff,
-                ref.width, ref.height,
-                { threshold: 0.1 }
-            );
+                // Calculate multiple similarity metrics
+                const ssim = calculateSSIM(refGray, squareGray);
+                const ncc = calculateNormalizedCrossCorrelation(refGray, squareGray);
+                const pixelSim = calculatePixelSimilarity(ref, resizedSquare);
+                
+                // Fallback to pixelmatch for pixel difference count
+                const diff = new Uint8ClampedArray(ref.width * ref.height * 4);
+                const numDiffPixels = pixelmatch(
+                    refGray.data, squareGray.data, diff,
+                    ref.width, ref.height,
+                    { threshold: 0.1 }
+                );
+                const pixelMatchSim = Math.max(0, 1 - (numDiffPixels / (ref.width * ref.height)));
 
-            if (numDiffPixels < lowestDiff) {
-                lowestDiff = numDiffPixels;
-                bestMatch = index;
+                // Weighted combined similarity score
+                const combinedSimilarity = (
+                    0.4 * ssim +           // Structural similarity (most important)
+                    0.3 * Math.abs(ncc) +  // Normalized cross-correlation
+                    0.2 * pixelSim +       // Pixel-wise similarity
+                    0.1 * pixelMatchSim    // Legacy pixel match
+                );
+
+                const details = {
+                    index: parseInt(index),
+                    ssim: (ssim * 100).toFixed(1),
+                    ncc: (ncc * 100).toFixed(1),
+                    pixelSim: (pixelSim * 100).toFixed(1),
+                    pixelMatch: (pixelMatchSim * 100).toFixed(1),
+                    combined: (combinedSimilarity * 100).toFixed(1),
+                    diffPixels: numDiffPixels
+                };
+                
+                matchDetails.push(details);
+                logger.debug(`Reference ${index}: SSIM=${details.ssim}%, NCC=${details.ncc}%, PixelSim=${details.pixelSim}%, Combined=${details.combined}%`);
+
+                if (combinedSimilarity > highestSimilarity) {
+                    highestSimilarity = combinedSimilarity;
+                    bestMatch = index;
+                }
             }
-        }
 
-        const confidence = Math.max(0, 100 - (lowestDiff / (size * size) * 100)).toFixed(1);
-        resolve(bestMatch !== null ? `${bestMatch} (${confidence}%)` : null);
+            // Sort match details by combined similarity for logging
+            matchDetails.sort((a, b) => parseFloat(b.combined) - parseFloat(a.combined));
+            
+            if (bestMatch !== null) {
+                const confidence = (highestSimilarity * 100).toFixed(1);
+                const result = `${bestMatch} (${confidence}%)`;
+                
+                logger.info(`Square (${i},${j}) identified as rotation ${bestMatch} with ${confidence}% confidence`);
+                logger.debug(`Top 3 matches: ${matchDetails.slice(0, 3).map(d => `${d.index}:${d.combined}%`).join(', ')}`);
+                
+                // Warn if confidence is low
+                if (highestSimilarity < 0.6) {
+                    logger.warn(`Low confidence match for square (${i},${j}): ${confidence}%`);
+                }
+                
+                resolve(result);
+            } else {
+                logger.warn(`No suitable match found for square (${i},${j})`);
+                resolve(null);
+            }
+            
+        } catch (error) {
+            logger.error(`Error identifying square (${i},${j}): ${error.message}`);
+            resolve(null);
+        }
     });
 }
 
@@ -737,8 +943,9 @@ function generateRaw(orientation = 'wall', type = 'raw', relativeX, relativeY, r
     }
 
     // Detect the cluster facing direction
+    logger.debug("Performing cluster direction detection...");
     const detectedDirection = determineClusterFacing(formationText);
-    console.log(`Detected direction: ${detectedDirection}`);
+    logger.info(`Detected direction: ${detectedDirection || 'None'}`);
 
     // Second pass: Generate final output with adjusted coordinates
     for (let key in squareTexts) {
@@ -803,7 +1010,8 @@ function generateRaw(orientation = 'wall', type = 'raw', relativeX, relativeY, r
     } else {
         displayGeneratedOutput(output,' ');
     }
-    console.log('Generated data:', output);
+    logger.info(`Generated ${type} data for ${orientation} orientation with ${Object.keys(squareTexts).length} squares`);
+    logger.debug(`Generated data preview: ${output.substring(0, 200)}${output.length > 200 ? '...' : ''}`);
 }
 
 function displayGeneratedOutput(output, title) {
@@ -914,29 +1122,32 @@ function findOriginBlock(blocks) {
 }
 
 function determineClusterFacing(formationText) {
+    logger.debug("Starting cluster facing direction detection");
     const blocks = parseFormationAddLines(formationText);
     
     if (blocks.length === 0) {
-        console.log("No blocks found in formation text");
+        logger.warn("No blocks found in formation text");
         return null;
     }
     
-    console.log("--- Scanned Blocks ---");
+    logger.info(`Found ${blocks.length} blocks for direction analysis`);
+    logger.debug("--- Scanned Blocks ---");
     for (const b of blocks) {
-        console.log(`Block at (${b.x}, ${b.z}) rotation ${b.rot}`);
+        logger.debug(`Block at (${b.x}, ${b.z}) rotation ${b.rot}`);
     }
     
     const originBlock = findOriginBlock(blocks);
     
     if (originBlock === null) {
-        console.log("Could not find a block that originated at (0,0).");
+        logger.warn("Could not find a block that originated at (0,0).");
         return null;
     }
     
     const scannedRotation = originBlock.rot % 4;
     const facing = DIRECTIONS[scannedRotation];
     
-    console.log(`Original cluster facing direction: ${facing} (rotation ${scannedRotation})`);
+    logger.info(`Cluster facing direction detected: ${facing} (rotation ${scannedRotation})`);
+    logger.debug(`Origin block found at (${originBlock.x}, ${originBlock.z}) with rotation ${originBlock.rot}`);
     return facing;
 }
 
