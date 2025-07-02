@@ -1,0 +1,5 @@
+opencv-python==4.8.1.78
+numpy
+matplotlib==3.7.3
+tensorflow==2.15.0
+tensorflowjs==4.22.0
