@@ -1,0 +1,29 @@
+[
+    {
+        "filename": "redsand0.png",
+        "avg_color": [
+            191,
+            103,
+            33
+        ],
+        "type": "redsand0"
+    },
+    {
+        "filename": "grass.png",
+        "avg_color": [
+            72,
+            93,
+            47
+        ],
+        "type": "grass"
+    },
+    {
+        "filename": "stone_0.png",
+        "avg_color": [
+            126,
+            126,
+            126
+        ],
+        "type": "stone_0"
+    }
+]

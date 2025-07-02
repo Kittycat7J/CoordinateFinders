@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image Color Classifier</title>
+</head>
+<body>
+<input type="file" id="imgInput" accept="image/*">
+<img id="preview" style="max-width: 300px; display:none;">
+<p id="result"></p>
+
+<script>
+  let avgColorData = [];
+
+  fetch('block_colors.json')
+    .then(response => response.json())
+    .then(data => {
+      avgColorData = data;
+    });
+
+  document.getElementById("imgInput").addEventListener("change", function(e) {
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      const img = document.getElementById("preview");
+      img.src = ev.target.result;
+      img.onload = function() {
+        const avg = getAverageColorFromImage(img);
+        const type = classifyImageByColor(avg);
+        document.getElementById("result").textContent =
+          `Type: ${type} | Avg Color: [${avg.join(", ")}]`;
+      };
+      img.style.display = "block";
+    };
+    reader.readAsDataURL(file);
+  });
+
+  function getAverageColorFromImage(imgElement) {
+    const canvas = document.createElement('canvas');
+    canvas.width = imgElement.width;
+    canvas.height = imgElement.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(imgElement, 0, 0, imgElement.width, imgElement.height);
+    const data = ctx.getImageData(0, 0, imgElement.width, imgElement.height).data;
+
+    let r = 0, g = 0, b = 0, count = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      r += data[i];
+      g += data[i + 1];
+      b += data[i + 2];
+      count++;
+    }
+    return [
+      Math.round(r / count),
+      Math.round(g / count),
+      Math.round(b / count)
+    ];
+  }
+
+  function colorDistance(c1, c2) {
+    return Math.sqrt(
+      Math.pow(c1[0] - c2[0], 2) +
+      Math.pow(c1[1] - c2[1], 2) +
+      Math.pow(c1[2] - c2[2], 2)
+    );
+  }
+
+  function classifyImageByColor(avgColor) {
+    if (!avgColorData || avgColorData.length === 0) {
+        return null;
+    }
+
+    let closest = avgColorData[0];
+    let minDistance = colorDistance(avgColor, closest.avg_color);
+
+    for (let i = 1; i < avgColorData.length; i++) {
+        const entry = avgColorData[i];
+        const dist = colorDistance(avgColor, entry.avg_color);
+        if (dist < minDistance) {
+            minDistance = dist;
+            closest = entry;
+        }
+    }
+
+    return closest.type;
+}
+console.log("Loaded avgColorData:", avgColorData);
+
+</script>
+</body>
+</html>
