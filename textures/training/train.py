@@ -11,7 +11,7 @@ import tensorflowjs as tfjs
 DATA_DIR = "./output"  # Use the output from generate_variants.py
 IMAGE_SIZE = (64, 64)
 BATCH_SIZE = 32
-EPOCHS = 32
+EPOCHS = 64
 SEED = 42
 
 # Load dataset (grayscale, no augmentation)
