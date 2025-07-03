@@ -394,13 +394,37 @@ function handleKeyDown(e) {
         }
         return; // Do not fall through to other key handlers if a number key was pressed
     }
-    
     // Adjust point movement step size
-    if (e.key === '+' || e.key === '=') { pointMoveStep = Math.min(10, pointMoveStep + 1); return; }
-    if (e.key === '-') { pointMoveStep = Math.max(1, pointMoveStep - 1); return; }
+    if (e.key === '+' || e.key === '=') {
+        if (e.shiftKey) {
+            pointMoveStep = Math.min(15, pointMoveStep * 1.5);
+            // Round to 3 decimal places
+            pointMoveStep = Math.round(pointMoveStep * 1000) / 1000;
+        } else {
+            // For normal increment, set to next whole number (integer)
+            pointMoveStep = Math.min(15, Math.round(pointMoveStep + 1));
+        }
+        return;
+    }
+    if (e.key === '-' || e.key === '_') {
+        if (e.shiftKey) {
+            pointMoveStep = Math.max(0.001, pointMoveStep * (2/3));
+            // Round to 3 decimal places
+            pointMoveStep = Math.round(pointMoveStep * 1000) / 1000;
+        } else {
+            pointMoveStep = Math.max(0.001, Math.round(pointMoveStep - 1));
+            // Round to 3 decimal places
+            
+        }
+        return;
+    }
     
-    // Reset points to default positions
-    if (e.key === 'r' || e.key === 'R') { resetPoints(); return; }
+    // Reset points to default positions and reset point move step to 5
+    if (e.key === 'r' || e.key === 'R') { 
+        pointMoveStep = 5;
+        resetPoints(); 
+        return; 
+    }
     
     if (changed) {
         // Apply new position to the selected point
@@ -518,7 +542,6 @@ function preprocessCanvasForModel(canvas) {
 // Function to run AI prediction on a given cropped canvas (grid square)
 async function runOnSquare(croppedCanvas, info) {
     // Color-based block type detection (runs first)
-    console.log('Color-based block type detection (runs first)');
     const avgColor = getAverageColorFromImage(croppedCanvas);
     console.log('Average color:', avgColor);
     const colorType = classifyImageByColor(avgColor);
@@ -711,31 +734,38 @@ function drawGridOverlay() {
     // Draw text (detection info and grid position) on each detected square
     for (let key in squareTexts) {
         let [i, j] = key.split(',').map(Number); // Parse grid indices from key
-
+    
         // Calculate the center of the current grid square
         let tlx = squarePoints[0][0] + i * squareSize;
         let tly = squarePoints[0][1] + j * squareSize;
         let centerX = tlx + squareSize / 2;
         let centerY = tly + squareSize / 2;
-
+    
         // Calculate font size proportional to 5/6 of the square width, divided by 1 + string length
         let yellowFontSize = Math.round((3 / 4) * squareSize / ((squareTexts[key].length)/2));
-        ctx.font = `${yellowFontSize}px Arial`;
-        ctx.fillStyle = 'yellow';
+    
+        // --- NEW: Parse confidence from the label ---
+        let confidenceMatch = squareTexts[key].match(/\(([\d.]+)%\)/);
+        let confidence = confidenceMatch ? parseFloat(confidenceMatch[1]) : 100;
+    
+        // --- NEW: Set style based on confidence ---
+        if (confidence < 95) {
+            ctx.font = `bold ${yellowFontSize}px Arial`;
+            ctx.fillStyle = 'red';
+        } else {
+            ctx.font = `${yellowFontSize}px Arial`;
+            ctx.fillStyle = 'yellow';
+        }
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(squareTexts[key], centerX, centerY - 10);
-
+    
         // Calculate font size proportional to 24/26 of the yellow font size
         ctx.font = `${Math.round((24 / 26) * yellowFontSize)}px Arial`;
         ctx.fillStyle = 'cyan';
         ctx.fillText(`(${i},${j})`, centerX, centerY + 10);
     }
-
-    
-    ctx.restore(); // Restore saved canvas state
 }
-
 // Dynamically update labels when the second image changes
 function updateLabelsOnImageChange() {
     if (!cleanWarpedCanvas || !squareDst) return;
@@ -1002,8 +1032,7 @@ function displayGeneratedOutput(output, title) {
     }
     
     // Populate the output display with the generated text and a download button
-    outputDisplay.innerHTML = `
-        <h4>${title}</h4>
+    outputDisplay.innerHTML = `        <h4>${title}</h4>
         <div class="code-block">
             <pre><code>${output}</code></pre>
         </div>
@@ -1144,3 +1173,4 @@ function adjustCoordinatesForDirection(x, z, detectedDirection) {
             return [x, z]; // Default to North if unknown
     }
 }
+
