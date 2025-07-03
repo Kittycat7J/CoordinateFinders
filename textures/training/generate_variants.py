@@ -1,6 +1,7 @@
 from PIL import Image
 import numpy as np
 import os
+import sys
 
 # === CONFIG ===
 INPUT_IMAGE_PATH = "input.png"  # Update this
@@ -60,19 +61,28 @@ def apply_flip(img, flip_type):
     return img  # No flip if flip_type is not "diagonal"
 
 def apply_rotation(img, rotation_type):
-    if rotation_type == 0:
-        return img  # 0 degrees
-    elif rotation_type == 1:
-        return img.rotate(-90, expand=True)  # 90 degrees clockwise
-    elif rotation_type == 2:
-        return img.rotate(-180, expand=True)  # 180 degrees
-    elif rotation_type == 3:
-        return img.rotate(-270, expand=True)  # 270 degrees clockwise
+    if "--alt" in sys.argv:
+        if rotation_type == 0:
+            return img  # 0 degrees
+        elif rotation_type == 1:
+            return img.transpose(Image.FLIP_LEFT_RIGHT)  # Flip left to right
+        elif rotation_type == 2:
+            return img.rotate(-180, expand=True)  # 180 degrees
+        elif rotation_type == 3:
+            flipped = img.transpose(Image.FLIP_LEFT_RIGHT)  # Flip left to right
+            return flipped.rotate(-180, expand=True)  # 180 degrees
+    else:
+        if rotation_type == 0:
+            return img  # 0 degrees
+        elif rotation_type == 1:
+            return img.rotate(-90, expand=True)  # 90 degrees clockwise
+        elif rotation_type == 2:
+            return img.rotate(-180, expand=True)  # 180 degrees
+        elif rotation_type == 3:
+            return img.rotate(-270, expand=True)  # 270 degrees clockwise
 
 # === MAIN ===
-# Copy the input image to the output directory
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
+
 # Load and resize input
 img = Image.open(INPUT_IMAGE_PATH).convert("L").resize(IMAGE_SIZE)  # Convert to grayscale
 
@@ -86,11 +96,10 @@ for class_id in range(4):
 
     count = 0
     for direction in DIRECTIONS:
-        for step in range(1,VARIATIONS_PER_DIRECTION + 1):
+        for step in range(VARIATIONS_PER_DIRECTION + 1):
             shift = int(MAX_SHIFT * step / VARIATIONS_PER_DIRECTION)
             skewed = apply_skew(rotated, direction, shift)
             flipped = apply_flip(skewed, "diagonal")
             out_path = os.path.join(OUTPUT_DIR, f"class_{class_id}", f"img_{count:03}({class_id}).png")
             flipped.save(out_path)
             count += 1
-            print(f"Saved: {out_path}")
