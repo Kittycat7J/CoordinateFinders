@@ -367,13 +367,37 @@ function handleKeyDown(e) {
         return; // Do not fall through to other key handlers if a number key was pressed
     }
     
-    // Adjust point movement step size
-    if (e.key === '+' || e.key === '=') { pointMoveStep = Math.min(10, pointMoveStep + 1); return; }
-    if (e.key === '-') { pointMoveStep = Math.max(1, pointMoveStep - 1); return; }
+     // Adjust point movement step size
+    if (e.key === '+' || e.key === '=') {
+        if (e.shiftKey) {
+            pointMoveStep = Math.min(15, pointMoveStep * 1.5);
+            // Round to 3 decimal places
+            pointMoveStep = Math.round(pointMoveStep * 1000) / 1000;
+        } else {
+            // For normal increment, set to next whole number (integer)
+            pointMoveStep = Math.min(15, Math.round(pointMoveStep + 1));
+        }
+        return;
+    }
+    if (e.key === '-' || e.key === '_') {
+        if (e.shiftKey) {
+            pointMoveStep = Math.max(0.001, pointMoveStep * (2/3));
+            // Round to 3 decimal places
+            pointMoveStep = Math.round(pointMoveStep * 1000) / 1000;
+        } else {
+            pointMoveStep = Math.max(0.001, Math.round(pointMoveStep - 1));
+            // Round to 3 decimal places
+            
+        }
+        return;
+    }
     
-    // Reset points to default positions
-    if (e.key === 'r' || e.key === 'R') { resetPoints(); return; }
-    
+    // Reset points to default positions and reset point move step to 5
+    if (e.key === 'r' || e.key === 'R') { 
+        pointMoveStep = 5;
+        resetPoints(); 
+        return;
+    }
     if (changed) {
         // Apply new position to the selected point
         points[lastSelectedPoint] = [x, y];
