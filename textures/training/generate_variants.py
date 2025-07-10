@@ -1,10 +1,9 @@
 from PIL import Image
-import numpy as np
 import os
 import sys
 
 # === CONFIG ===
-INPUT_IMAGE_PATH = "input.png"  # Update this
+BLOCKS_FOLDER = "blocks"  # relative to this script
 OUTPUT_DIR = "./output"
 IMAGE_SIZE = (64, 64)
 VARIATIONS_PER_DIRECTION = 16
@@ -13,13 +12,6 @@ DIRECTIONS = [
     "top", "bottom", "left", "right",
     "top_left", "top_right", "bottom_left", "bottom_right"
 ]
-
-FLIP_TYPES = {
-    0: None,
-    1: Image.FLIP_LEFT_RIGHT,
-    2: Image.FLIP_TOP_BOTTOM,
-    3: "both"
-}
 
 # === UTILITIES ===
 
@@ -53,15 +45,15 @@ def get_quad_coords(direction, shift):
 def apply_skew(img, direction, shift):
     src_quad = (0, 0, IMAGE_SIZE[0], 0, IMAGE_SIZE[0], IMAGE_SIZE[1], 0, IMAGE_SIZE[1])
     dst_quad = get_quad_coords(direction, shift)
-    return img.transform(IMAGE_SIZE, Image.QUAD, dst_quad, Image.BICUBIC)
+    return img.transform(IMAGE_SIZE, Image.QUAD, dst_quad, resample=Image.Resampling.BICUBIC)
 
 def apply_flip(img, flip_type):
     if flip_type == "diagonal":
         return img.transpose(Image.TRANSPOSE)  # Flip over y = x
     return img  # No flip if flip_type is not "diagonal"
 
-def apply_rotation(img, rotation_type):
-    if "--alt" in sys.argv:
+def apply_rotation(img, rotation_type, alt=False):
+    if alt:
         if rotation_type == 0:
             return img  # 0 degrees
         elif rotation_type == 1:
@@ -83,23 +75,29 @@ def apply_rotation(img, rotation_type):
 
 # === MAIN ===
 
-# Load and resize input
-img = Image.open(INPUT_IMAGE_PATH).convert("L").resize(IMAGE_SIZE)  # Convert to grayscale
+for filename in os.listdir(BLOCKS_FOLDER):
+    if not filename.lower().endswith((".png", ".jpg", ".jpeg")):
+        continue
+    block_name = filename.rsplit(".", 1)[0]
+    alt = False
+    if block_name.endswith("_alt"):
+        print("alt")
+        alt = True
+        block_name = block_name[:-4] 
+    img_path = os.path.join(BLOCKS_FOLDER, filename)
+    img = Image.open(img_path).convert("L").resize(IMAGE_SIZE)  # Convert to grayscale
 
-# Make output folders
-for class_id in range(4):
-    os.makedirs(os.path.join(OUTPUT_DIR, f"class_{class_id}"), exist_ok=True)
-
-# Generate variations
-for class_id in range(4):
-    rotated = apply_rotation(img, class_id)  # Apply rotation based on class ID
-
-    count = 0
-    for direction in DIRECTIONS:
-        for step in range(VARIATIONS_PER_DIRECTION + 1):
-            shift = int(MAX_SHIFT * step / VARIATIONS_PER_DIRECTION)
-            skewed = apply_skew(rotated, direction, shift)
-            flipped = apply_flip(skewed, "diagonal")
-            out_path = os.path.join(OUTPUT_DIR, f"class_{class_id}", f"img_{count:03}({class_id}).png")
-            flipped.save(out_path)
-            count += 1
+    block_output_base = os.path.join(OUTPUT_DIR, block_name)
+    for class_id in range(4):
+        class_dir = f"{block_output_base}_{class_id}"
+        os.makedirs(class_dir, exist_ok=True)
+        rotated = apply_rotation(img, class_id, alt=alt)
+        count = 0
+        for direction in DIRECTIONS:
+            for step in range(1, VARIATIONS_PER_DIRECTION + 1):
+                shift = int(MAX_SHIFT * step / VARIATIONS_PER_DIRECTION)
+                skewed = apply_skew(rotated, direction, shift)
+                flipped = apply_flip(skewed, "diagonal")
+                out_path = os.path.join(class_dir, f"img_{count:03}({class_id}).png")
+                flipped.save(out_path)
+                count += 1

@@ -6,6 +6,7 @@ import os
 import subprocess
 import shutil
 import tensorflowjs as tfjs
+import re
 
 # Configuration
 DATA_DIR = "./output"  # Use the output from generate_variants.py
@@ -14,41 +15,51 @@ BATCH_SIZE = 32
 EPOCHS = 64
 SEED = 42
 
-# Load dataset (grayscale, no augmentation)
-train_ds = keras.utils.image_dataset_from_directory(
-    DATA_DIR,
-    labels='inferred',
-    label_mode='int',
-    color_mode='grayscale',
-    batch_size=BATCH_SIZE,
-    image_size=IMAGE_SIZE,
-    shuffle=True,
-    seed=SEED,
-    validation_split=0.2,
-    subset='training'
-)
-val_ds = keras.utils.image_dataset_from_directory(
-    DATA_DIR,
-    labels='inferred',
-    label_mode='int',
-    color_mode='grayscale',
-    batch_size=BATCH_SIZE,
-    image_size=IMAGE_SIZE,
-    shuffle=True,
-    seed=SEED,
-    validation_split=0.2,
-    subset='validation'
-)
+# --- Custom dataset loader for new folder structure ---
+def get_image_paths_and_labels(data_dir):
+    image_paths = []
+    labels = []
+    class_pattern = re.compile(r"_(\d+)$")
+    for folder in os.listdir(data_dir):
+        folder_path = os.path.join(data_dir, folder)
+        if not os.path.isdir(folder_path):
+            continue
+        match = class_pattern.search(folder)
+        if not match:
+            continue
+        class_id = int(match.group(1))
+        for fname in os.listdir(folder_path):
+            if fname.lower().endswith((".png", ".jpg", ".jpeg")):
+                image_paths.append(os.path.join(folder_path, fname))
+                labels.append(class_id)
+    return image_paths, labels
 
-# Prefetch for performance
-AUTOTUNE = tf.data.AUTOTUNE
-train_ds = train_ds.prefetch(AUTOTUNE)
-val_ds = val_ds.prefetch(AUTOTUNE)
+image_paths, labels = get_image_paths_and_labels(DATA_DIR)
+
+# --- TensorFlow dataset creation ---
+def decode_img(img_path):
+    img = tf.io.read_file(img_path)
+    img = tf.io.decode_png(img, channels=1)
+    img = tf.image.resize(img, IMAGE_SIZE)
+    img = tf.cast(img, tf.float32) / 255.0
+    return img
+
+def process_path(file_path, label):
+    img = decode_img(file_path)
+    return img, label
+
+dataset = tf.data.Dataset.from_tensor_slices((image_paths, labels))
+dataset = dataset.shuffle(buffer_size=len(image_paths), seed=SEED, reshuffle_each_iteration=True)
+dataset = dataset.map(process_path, num_parallel_calls=tf.data.AUTOTUNE)
+
+# Split into train/val
+val_size = int(0.2 * len(image_paths))
+train_ds = dataset.skip(val_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+val_ds = dataset.take(val_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
 # Model definition
 model = models.Sequential([
     keras.layers.InputLayer(input_shape=(64, 64, 1)),
-    layers.Rescaling(1./255),
     layers.Conv2D(32, (3, 3), activation='relu'),
     layers.MaxPooling2D((2, 2)),
     layers.Conv2D(64, (3, 3), activation='relu'),
@@ -96,7 +107,6 @@ for fname in ['model.json', 'group1-shard1of1.bin']:
 
 # Convert to TensorFlow.js format using the Python API
 tfjs.converters.save_keras_model(model, tfjs_output_dir)
-
 
 # Optional: Plot training history
 plt.plot(history.history['accuracy'], label='train_accuracy')
