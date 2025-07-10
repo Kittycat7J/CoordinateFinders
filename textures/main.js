@@ -371,11 +371,13 @@ function handleKeyDown(e) {
     if (e.key === '+' || e.key === '=') {
         if (e.shiftKey) {
             pointMoveStep = Math.min(15, pointMoveStep * 1.5);
+            console.log('Point move step increased to:', pointMoveStep);
             // Round to 3 decimal places
             pointMoveStep = Math.round(pointMoveStep * 1000) / 1000;
         } else {
             // For normal increment, set to next whole number (integer)
             pointMoveStep = Math.min(15, Math.round(pointMoveStep + 1));
+            console.log('Point move step increased to:', pointMoveStep);
         }
         return;
     }
@@ -384,10 +386,11 @@ function handleKeyDown(e) {
             pointMoveStep = Math.max(0.001, pointMoveStep * (2/3));
             // Round to 3 decimal places
             pointMoveStep = Math.round(pointMoveStep * 1000) / 1000;
+            console.log('Point move step decreased to:', pointMoveStep);
         } else {
-            pointMoveStep = Math.max(0.001, Math.round(pointMoveStep - 1));
+            pointMoveStep = Math.max(1, Math.round(pointMoveStep - 1));
+            console.log('Point move step decreased to:', pointMoveStep);
             // Round to 3 decimal places
-            
         }
         return;
     }
@@ -533,7 +536,8 @@ async function runOnSquare(croppedCanvas, info) {
     for (let i = 0; i < data.length; i++) {
         console.log(`  Class ${classNames[i]}: ${(data[i] * 100).toFixed(2)}%`);
     }
-    console.log(`Predicted class: ${classNames[predictedClass]} (index: ${predictedClass})`);
+    // Print both the class index and the full class name
+    console.log(`Predicted class: ${classNames[predictedClass]} (index: ${predictedClass}) [Full class name: ${classNames[predictedClass]}]`);
     console.log(`Confidence: ${(confidence * 100).toFixed(2)}%`);
     console.log('=== End Debug ===');
     
