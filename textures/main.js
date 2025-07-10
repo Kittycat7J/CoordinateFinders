@@ -19,67 +19,25 @@ let squareDst = null;
 let cleanWarpedCanvas = null; // For storing the warped image before grid lines
 
 // --- TensorFlow.js Model Integration ---
-let modelCache = {}; // Cache for loaded models by colorType
+let tfModel = null;
 let classNames = ['0', '1', '2', '3']; // Update if your model uses different class names
 let lowConfidenceSquares = {}; // Track squares with confidence below 70%
 
-// --- Block Color Classifier Integration ---
-let blockColorData = [];
-
-// Load block_colors.json at startup
-fetch('type/block_colors.json')
-  .then(response => response.json())
-  .then(data => {
-    blockColorData = data;
-    console.log('Loaded blockColorData:', blockColorData);
-  });
-
-function getAverageColorFromImage(imgElement) {
-  const canvas = document.createElement('canvas');
-  canvas.width = imgElement.width;
-  canvas.height = imgElement.height;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(imgElement, 0, 0, imgElement.width, imgElement.height);
-  const data = ctx.getImageData(0, 0, imgElement.width, imgElement.height).data;
-
-  let r = 0, g = 0, b = 0, count = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    r += data[i];
-    g += data[i + 1];
-    b += data[i + 2];
-    count++;
-  }
-  return [
-    Math.round(r / count),
-    Math.round(g / count),
-    Math.round(b / count)
-  ];
-}
-
-function colorDistance(c1, c2) {
-  return Math.sqrt(
-    Math.pow(c1[0] - c2[0], 2) +
-    Math.pow(c1[1] - c2[1], 2) +
-    Math.pow(c1[2] - c2[2], 2)
-  );
-}
-
-function classifyImageByColor(avgColor) {
-  if (!blockColorData || blockColorData.length === 0) {
-    return null;
-  }
-  let closest = blockColorData[0];
-  let minDistance = colorDistance(avgColor, closest.avg_color);
-  for (let i = 1; i < blockColorData.length; i++) {
-    const entry = blockColorData[i];
-    const dist = colorDistance(avgColor, entry.avg_color);
-    if (dist < minDistance) {
-      minDistance = dist;
-      closest = entry;
+async function loadModel() {
+    try {
+        // Adjust the model path if it's not directly in the root
+        tfModel = await tf.loadLayersModel('model/model.json');
+        console.log('Model loaded!');
+    } catch (error) {
+        console.error('Failed to load TensorFlow.js model:', error);
+        // Optionally display a message to the user that the model failed to load
+        // Using a custom modal/message box instead of alert()
+        showMessageBox('Warning: AI model could not be loaded. Prediction functionality will be limited.');
     }
-  }
-  return closest.type;
 }
+// Load the model once OpenCV.js is ready, or on app init
+// For simplicity, calling here directly. In a real app, you might wait for OpenCV.js `onRuntimeInitialized`.
+loadModel();
 
 // Magnified view variables
 let magnifiedCanvas, magnifiedCtx;
@@ -150,6 +108,20 @@ function showMessageBox(message) {
         </div>
     `;
     document.body.appendChild(messageBox);
+}
+
+// Ensure OpenCV.js is loaded before initializing the app
+if (typeof cv !== 'undefined' && cv.onRuntimeInitialized) {
+    cv.onRuntimeInitialized = () => {
+        appInit();
+    };
+} else if (typeof cv !== 'undefined') {
+    // Fallback for cases where onRuntimeInitialized might already be called
+    appInit();
+} else {
+    console.error("OpenCV.js not found or not initialized.");
+    // You might want to display an error message to the user here.
+    showMessageBox("Error: OpenCV.js is not loaded. Image processing features will not work.");
 }
 
 function handleImageUpload(e) {
@@ -394,37 +366,13 @@ function handleKeyDown(e) {
         }
         return; // Do not fall through to other key handlers if a number key was pressed
     }
-    // Adjust point movement step size
-    if (e.key === '+' || e.key === '=') {
-        if (e.shiftKey) {
-            pointMoveStep = Math.min(15, pointMoveStep * 1.5);
-            // Round to 3 decimal places
-            pointMoveStep = Math.round(pointMoveStep * 1000) / 1000;
-        } else {
-            // For normal increment, set to next whole number (integer)
-            pointMoveStep = Math.min(15, Math.round(pointMoveStep + 1));
-        }
-        return;
-    }
-    if (e.key === '-' || e.key === '_') {
-        if (e.shiftKey) {
-            pointMoveStep = Math.max(0.001, pointMoveStep * (2/3));
-            // Round to 3 decimal places
-            pointMoveStep = Math.round(pointMoveStep * 1000) / 1000;
-        } else {
-            pointMoveStep = Math.max(0.001, Math.round(pointMoveStep - 1));
-            // Round to 3 decimal places
-            
-        }
-        return;
-    }
     
-    // Reset points to default positions and reset point move step to 5
-    if (e.key === 'r' || e.key === 'R') { 
-        pointMoveStep = 5;
-        resetPoints(); 
-        return; 
-    }
+    // Adjust point movement step size
+    if (e.key === '+' || e.key === '=') { pointMoveStep = Math.min(10, pointMoveStep + 1); return; }
+    if (e.key === '-') { pointMoveStep = Math.max(1, pointMoveStep - 1); return; }
+    
+    // Reset points to default positions
+    if (e.key === 'r' || e.key === 'R') { resetPoints(); return; }
     
     if (changed) {
         // Apply new position to the selected point
@@ -541,48 +489,36 @@ function preprocessCanvasForModel(canvas) {
 
 // Function to run AI prediction on a given cropped canvas (grid square)
 async function runOnSquare(croppedCanvas, info) {
-    // Color-based block type detection (runs first)
-    const avgColor = getAverageColorFromImage(croppedCanvas);
-    console.log('Average color:', avgColor);
-    const colorType = classifyImageByColor(avgColor);
-    console.log('Color type:', colorType);
-    if (colorType) {
-        // Try to load the model for this colorType if not already loaded
-        if (!modelCache[colorType]) {
-            try {
-                modelCache[colorType] = await tf.loadLayersModel(`models/${colorType}/model.json`);
-                console.log(`Model for ${colorType} loaded!`);
-            } catch (error) {
-                console.error(`Failed to load TensorFlow.js model for ${colorType}:`, error);
-                showMessageBox(`Warning: AI model for ${colorType} could not be loaded. Prediction functionality will be limited.`);
-                return `${colorType} (no model)`;
-            }
-        }
-        // Use the loaded model for prediction
-        const tfModel = modelCache[colorType];
-        // Preprocess the cropped image for the model
-        let inputTensor = preprocessCanvasForModel(croppedCanvas);
-        let prediction = tfModel.predict(inputTensor);
-        let data = await prediction.data(); // Get prediction probabilities
-        console.log('Raw prediction data:', Array.from(data));
-        // Determine the predicted class (index of highest probability) and its confidence
-        let predictedClass = data.indexOf(Math.max(...data));
-        let confidence = Math.max(...data);
-        console.log('Class probabilities:');
-        for (let i = 0; i < data.length; i++) {
-            console.log(`  Class ${classNames[i]}: ${(data[i] * 100).toFixed(2)}%`);
-        }
-        console.log(`Predicted class: ${classNames[predictedClass]} (index: ${predictedClass})`);
-        console.log(`Confidence: ${(confidence * 100).toFixed(2)}%`);
-        console.log('=== End Debug ===');
-        // Dispose tensors to free up memory
-        inputTensor.dispose();
-        prediction.dispose();
-        // Return formatted result string
-        return `${classNames[predictedClass]} (${(confidence*100).toFixed(1)}%)`;
-    } else {
-        return 'Unknown (no color match)';
+    if (!tfModel) return 'Model Loading...'; // Indicate model is not ready
+
+    console.log(`=== Debug: Processing square (${info.i}, ${info.j}) ===`);
+    
+    // Preprocess the cropped image for the model
+    let inputTensor = preprocessCanvasForModel(croppedCanvas);
+    
+    // Make prediction using the loaded TensorFlow.js model
+    let prediction = tfModel.predict(inputTensor);
+    let data = await prediction.data(); // Get prediction probabilities
+    console.log('Raw prediction data:', Array.from(data));
+    
+    // Determine the predicted class (index of highest probability) and its confidence
+    let predictedClass = data.indexOf(Math.max(...data));
+    let confidence = Math.max(...data);
+    
+    console.log('Class probabilities:');
+    for (let i = 0; i < data.length; i++) {
+        console.log(`  Class ${classNames[i]}: ${(data[i] * 100).toFixed(2)}%`);
     }
+    console.log(`Predicted class: ${classNames[predictedClass]} (index: ${predictedClass})`);
+    console.log(`Confidence: ${(confidence * 100).toFixed(2)}%`);
+    console.log('=== End Debug ===');
+    
+    // Dispose tensors to free up memory
+    inputTensor.dispose();
+    prediction.dispose();
+    
+    // Return formatted result string
+    return `${classNames[predictedClass]} (${(confidence*100).toFixed(1)}%)`;
 }
 
 // Handle clicks on the output canvas to trigger AI prediction for a square
@@ -734,38 +670,56 @@ function drawGridOverlay() {
     // Draw text (detection info and grid position) on each detected square
     for (let key in squareTexts) {
         let [i, j] = key.split(',').map(Number); // Parse grid indices from key
-    
+
         // Calculate the center of the current grid square
         let tlx = squarePoints[0][0] + i * squareSize;
         let tly = squarePoints[0][1] + j * squareSize;
         let centerX = tlx + squareSize / 2;
         let centerY = tly + squareSize / 2;
-    
+
         // Calculate font size proportional to 5/6 of the square width, divided by 1 + string length
         let yellowFontSize = Math.round((3 / 4) * squareSize / ((squareTexts[key].length)/2));
-    
-        // --- NEW: Parse confidence from the label ---
-        let confidenceMatch = squareTexts[key].match(/\(([\d.]+)%\)/);
-        let confidence = confidenceMatch ? parseFloat(confidenceMatch[1]) : 100;
-    
-        // --- NEW: Set style based on confidence ---
-        if (confidence < 95) {
-            ctx.font = `bold ${yellowFontSize}px Arial`;
-            ctx.fillStyle = 'red';
-        } else {
-            ctx.font = `${yellowFontSize}px Arial`;
-            ctx.fillStyle = 'yellow';
-        }
+        ctx.font = `${yellowFontSize}px Arial`;
+        ctx.fillStyle = 'yellow';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(squareTexts[key], centerX, centerY - 10);
-    
+
         // Calculate font size proportional to 24/26 of the yellow font size
         ctx.font = `${Math.round((24 / 26) * yellowFontSize)}px Arial`;
         ctx.fillStyle = 'cyan';
         ctx.fillText(`(${i},${j})`, centerX, centerY + 10);
     }
+
+    // Draw visual overlay for squares with low confidence
+    for (let key in lowConfidenceSquares) {
+        let [i, j] = key.split(',').map(Number); // Parse grid indices from key
+
+        // Calculate the position of the current grid square
+        let tlx = squarePoints[0][0] + i * squareSize;
+        let tly = squarePoints[0][1] + j * squareSize;
+
+        // Draw a semi-transparent red overlay to indicate low confidence
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+        ctx.fillRect(tlx, tly, squareSize, squareSize);
+
+        // Draw a red border around the square
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(tlx, tly, squareSize, squareSize);
+
+        // Add text indicating low confidence
+        let centerX = tlx + squareSize / 2;
+        let centerY = tly + squareSize / 2;
+        ctx.font = `${Math.round(squareSize / 8)}px Arial`;
+        ctx.fillStyle = 'red';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('Low Confidence', centerX, centerY);
+    }
+    ctx.restore(); // Restore saved canvas state
 }
+
 // Dynamically update labels when the second image changes
 function updateLabelsOnImageChange() {
     if (!cleanWarpedCanvas || !squareDst) return;
@@ -1032,7 +986,8 @@ function displayGeneratedOutput(output, title) {
     }
     
     // Populate the output display with the generated text and a download button
-    outputDisplay.innerHTML = `        <h4>${title}</h4>
+    outputDisplay.innerHTML = `
+        <h4>${title}</h4>
         <div class="code-block">
             <pre><code>${output}</code></pre>
         </div>
@@ -1173,4 +1128,3 @@ function adjustCoordinatesForDirection(x, z, detectedDirection) {
             return [x, z]; // Default to North if unknown
     }
 }
-
