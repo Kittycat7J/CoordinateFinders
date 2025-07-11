@@ -20,18 +20,43 @@ let cleanWarpedCanvas = null; // For storing the warped image before grid lines
 
 // --- TensorFlow.js Model Integration ---
 let tfModel = null;
-let classNames = ['0', '1', '2', '3']; // Update if your model uses different class names
+ // Update if your model uses different class names
 let lowConfidenceSquares = {}; // Track squares with confidence below 70%
 
 async function loadModel() {
     try {
-        // Adjust the model path if it's not directly in the root
         tfModel = await tf.loadLayersModel('model/model.json');
-        console.log('Model loaded!');
+        // Try to load class_names.txt for human-friendly class names
+        try {
+            const response = await fetch('model/class_names.txt');
+            if (response.ok) {
+                const text = await response.text();
+                classNames = text.split('\n').filter(x => x.trim().length > 0);
+                console.log('Loaded class names from class_names.txt:', classNames);
+            } else {
+                // Fallback: use generic class names
+                const outputShape = tfModel.outputs[0].shape;
+                const numClasses = outputShape[outputShape.length - 1];
+                classNames = Array.from({length: numClasses}, (_, i) => i.toString());
+                console.log('class_names.txt not found, using generic class names:', classNames);
+            }
+        } catch (e) {
+            // Fallback: use generic class names
+            const outputShape = tfModel.outputs[0].shape;
+            const numClasses = outputShape[outputShape.length - 1];
+            classNames = Array.from({length: numClasses}, (_, i) => i.toString());
+            console.log('Error loading class_names.txt, using generic class names:', classNames);
+        }
+        console.log('Model loaded! Class count:', classNames.length, 'Class names:', classNames);
+        if (classNames.length !== tfModel.outputs[0].shape[1]) {
+            console.warn(
+                `Mismatch: Model outputs ${tfModel.outputs[0].shape[1]} classes, but class_names.txt has ${classNames.length} entries.`
+            );
+            // Optionally, fallback to generic class names
+            classNames = Array.from({length: tfModel.outputs[0].shape[1]}, (_, i) => i.toString());
+        }
     } catch (error) {
         console.error('Failed to load TensorFlow.js model:', error);
-        // Optionally display a message to the user that the model failed to load
-        // Using a custom modal/message box instead of alert()
         showMessageBox('Warning: AI model could not be loaded. Prediction functionality will be limited.');
     }
 }
