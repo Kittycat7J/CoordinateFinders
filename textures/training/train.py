@@ -12,8 +12,8 @@ import re
 DATA_DIR = "./output"  # Use the output from generate_variants.py
 IMAGE_SIZE = (64, 64)
 BATCH_SIZE = 32
-EPOCHS = 48
-SEED = 42
+EPOCHS = 16
+SEED = 69
 
 # --- Custom dataset loader for new folder structure ---
 def get_image_paths_and_labels(data_dir):
