@@ -12,26 +12,50 @@ import re
 DATA_DIR = "./output"  # Use the output from generate_variants.py
 IMAGE_SIZE = (64, 64)
 BATCH_SIZE = 32
-EPOCHS = 64
+EPOCHS = 48
 SEED = 42
 
 # --- Custom dataset loader for new folder structure ---
 def get_image_paths_and_labels(data_dir):
     image_paths = []
     labels = []
-    class_pattern = re.compile(r"_(\d+)$")
+    
+    # Get all unique folder names and create a mapping
+    folder_names = []
+    for folder in os.listdir(data_dir):
+        folder_path = os.path.join(data_dir, folder)
+        if os.path.isdir(folder_path):
+            folder_names.append(folder)
+    
+    # Sort folder names for consistent ordering
+    folder_names.sort()
+    
+    # Create mapping from folder name to class ID
+    class_mapping = {folder: i for i, folder in enumerate(folder_names)}
+    
+    print(f"Found {len(folder_names)} classes:")
+    for folder, class_id in class_mapping.items():
+        print(f"  {folder} → Class {class_id}")
+    
+    # Now scan folders and assign integer labels
     for folder in os.listdir(data_dir):
         folder_path = os.path.join(data_dir, folder)
         if not os.path.isdir(folder_path):
             continue
-        match = class_pattern.search(folder)
-        if not match:
-            continue
-        class_id = int(match.group(1))
+        
+        # Get the integer class ID for this folder
+        class_id = class_mapping[folder]
+        
+        # Add all images in this folder with the same class_id
         for fname in os.listdir(folder_path):
             if fname.lower().endswith((".png", ".jpg", ".jpeg")):
                 image_paths.append(os.path.join(folder_path, fname))
-                labels.append(class_id)
+                labels.append(class_id)  # ← Now stores integers!
+    
+    print(f"Total images: {len(image_paths)}")
+    print(f"Unique labels: {len(set(labels))}")
+    print(f"Label range: {min(labels)} to {max(labels)}")
+    
     return image_paths, labels
 
 image_paths, labels = get_image_paths_and_labels(DATA_DIR)
@@ -69,7 +93,7 @@ model = models.Sequential([
     layers.Flatten(),
     layers.Dense(128, activation='relu'),
     layers.Dropout(0.5),
-    layers.Dense(4, activation='softmax')
+    layers.Dense(len(set(labels)), activation='softmax')
 ])
 
 model.compile(
@@ -90,7 +114,7 @@ model.save('model.keras')
 # --- TensorFlow.js export ---
 
 # Define the output directory for the TF.js model (update this for each block type as needed)
-tfjs_output_dir = './model_tfjs'
+tfjs_output_dir = '../model'
 
 # Ensure the output directory exists
 os.makedirs(tfjs_output_dir, exist_ok=True)
@@ -107,6 +131,19 @@ for fname in ['model.json', 'group1-shard1of1.bin']:
 
 # Convert to TensorFlow.js format using the Python API
 tfjs.converters.save_keras_model(model, tfjs_output_dir)
+
+# After TensorFlow.js export, save class names to a file for reference
+block_files = [f for f in os.listdir(os.path.join(os.path.dirname(__file__), 'blocks')) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+block_names = []
+for fname in block_files:
+    name = fname.rsplit('.', 1)[0]
+    if name.endswith('_alt'):
+        name = name[:-4]
+    block_names.append(name)
+class_names = [f"{block}{i}" for block in block_names for i in range(4)]
+with open(os.path.join(tfjs_output_dir, 'class_names.txt'), 'w') as f:
+    for name in class_names:
+        f.write(f"{name}\n")
 
 # Optional: Plot training history
 plt.plot(history.history['accuracy'], label='train_accuracy')
